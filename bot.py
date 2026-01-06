@@ -2,12 +2,12 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-import threading
 import json
-from datetime import time, timezone
+from datetime import timezone
 import base64
 import re
 import os
+import asyncio
 
 from telegram import (
     Update,
@@ -50,9 +50,10 @@ poll_question = "Ежедневный опрос: Как прошел ваш д�
 poll_options = ["Отлично", "Нормально", "Плохо"]
 reminder_text = "Напоминание: не забудьте выпить воды!"
 
-poll_jobs = []
-reminder_jobs = []
 subscribers = set()  # chat_id подписанных на уведомления
+
+# Храним фоновые таски уведомлений (вместо JobQueue)
+notification_tasks = {}  # {chat_id: {"morning": task, "day": task, "evening": task}}
 
 
 # ================== СОСТОЯНИЯ ==================
@@ -178,6 +179,13 @@ def calculate_bmi(height_cm, weight_kg):
 
 def get_user_tz(chat_id: int):
     return timezone(timedelta(hours=3))
+
+def seconds_until(hour: int, minute: int, tz):
+    now = datetime.now(tz)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 # ================== АНКЕТИРОВАНИЕ ==================
@@ -390,6 +398,70 @@ def calculate_zones(u):
     return zones
 
 
+# ================== УВЕДОМЛЕНИЯ (БЕЗ JobQueue) ==================
+async def morning_job(bot, chat_id: int):
+    text = (
+        "🌅 Доброе утро! Быстрый чек-ин.\n\n"
+        "1) Как спали? (0–5)\n"
+        "2) Энергия сейчас? (0–5)\n\n"
+        "💧 И напоминание: выпейте стакан воды прямо сейчас."
+    )
+    await bot.send_message(chat_id, text)
+
+async def day_job(bot, chat_id: int):
+    text = (
+        "🏙 Дневной чек-ин.\n\n"
+        "1) Уровень энергии сейчас? (0–5)\n"
+        "2) Уровень стресса? (0–5)\n\n"
+        "💧 Напоминание: вода. Даже 300–500 мл уже меняют самочувствие."
+    )
+    await bot.send_message(chat_id, text)
+
+async def evening_job(bot, chat_id: int):
+    text = (
+        "🌙 Вечерний итог дня.\n\n"
+        "1) Как прошёл день? (Отлично / Нормально / Плохо)\n"
+        "2) Сон сегодня планируете во сколько лечь?\n\n"
+        "😴 Напоминание: постарайтесь лечь пораньше. "
+        "Даже +30 минут сна часто дают ощутимый прирост энергии завтра."
+    )
+    await bot.send_message(chat_id, text)
+
+async def run_daily_loop(bot, chat_id: int, hour: int, minute: int, tz, job_coro):
+    while True:
+        try:
+            await asyncio.sleep(seconds_until(hour, minute, tz))
+            await job_coro(bot, chat_id)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logging.exception("Ошибка в daily loop: chat_id=%s %02d:%02d", chat_id, hour, minute)
+            await asyncio.sleep(5)
+
+def cancel_chat_tasks(chat_id: int):
+    tasks = notification_tasks.get(chat_id)
+    if not tasks:
+        return
+    for t in tasks.values():
+        try:
+            t.cancel()
+        except Exception:
+            pass
+    notification_tasks.pop(chat_id, None)
+
+def schedule_daily_notifications(application, chat_id: int):
+    tz = get_user_tz(chat_id)
+
+    cancel_chat_tasks(chat_id)
+
+    t1 = application.create_task(run_daily_loop(application.bot, chat_id, 9, 30, tz, morning_job))
+    t2 = application.create_task(run_daily_loop(application.bot, chat_id, 15, 0, tz, day_job))
+    t3 = application.create_task(run_daily_loop(application.bot, chat_id, 20, 0, tz, evening_job))
+
+    notification_tasks[chat_id] = {"morning": t1, "day": t2, "evening": t3}
+    subscribers.add(chat_id)
+
+
 # ================== ОТЧЕТ И ФИНАЛЬНОЕ МЕНЮ ==================
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = context.user_data
@@ -456,8 +528,13 @@ async def final_menu_handler(update, context):
     logging.info("final_menu_handler: text=%r chat_id=%s", text, chat_id)
 
     if text == "🔔 Подписаться на уведомления":
-        schedule_daily_notifications(context.application, chat_id)
-        logging.info("Subscribed and scheduled for chat_id=%s", chat_id)
+        try:
+            schedule_daily_notifications(context.application, chat_id)
+            logging.info("Subscribed and scheduled for chat_id=%s", chat_id)
+        except Exception:
+            logging.exception("Ошибка включения уведомлений")
+            await update.message.reply_text("Не получилось включить уведомления 😕", reply_markup=FINAL_KEYBOARD)
+            return FINAL_MENU_STATE
 
         await update.message.reply_text(
             "Уведомления включены ✅\n\n"
@@ -480,67 +557,6 @@ async def final_menu_handler(update, context):
     return FINAL_MENU_STATE
 
 
-async def morning_job(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    text = (
-        "🌅 Доброе утро! Быстрый чек-ин.\n\n"
-        "1) Как спали? (0–5)\n"
-        "2) Энергия сейчас? (0–5)\n\n"
-        "💧 И напоминание: выпейте стакан воды прямо сейчас."
-    )
-    await context.bot.send_message(chat_id, text)
-
-async def day_job(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    text = (
-        "🏙 Дневной чек-ин.\n\n"
-        "1) Уровень энергии сейчас? (0–5)\n"
-        "2) Уровень стресса? (0–5)\n\n"
-        "💧 Напоминание: вода. Даже 300–500 мл уже меняют самочувствие."
-    )
-    await context.bot.send_message(chat_id, text)
-
-async def evening_job(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    text = (
-        "🌙 Вечерний итог дня.\n\n"
-        "1) Как прошёл день? (Отлично / Нормально / Плохо)\n"
-        "2) Сон сегодня планируете во сколько лечь?\n\n"
-        "😴 Напоминание: постарайтесь лечь пораньше. "
-        "Даже +30 минут сна часто дают ощутимый прирост энергии завтра."
-    )
-    await context.bot.send_message(chat_id, text)
-
-def schedule_daily_notifications(application, chat_id: int):
-    tz = get_user_tz(chat_id)
-
-    for job in application.job_queue.get_jobs_by_name(f"morning_{chat_id}"):
-        job.schedule_removal()
-    for job in application.job_queue.get_jobs_by_name(f"day_{chat_id}"):
-        job.schedule_removal()
-    for job in application.job_queue.get_jobs_by_name(f"evening_{chat_id}"):
-        job.schedule_removal()
-
-    application.job_queue.run_daily(
-        morning_job,
-        time=time(hour=9, minute=30, tzinfo=tz),
-        name=f"morning_{chat_id}",
-        chat_id=chat_id
-    )
-    application.job_queue.run_daily(
-        day_job,
-        time=time(hour=15, minute=0, tzinfo=tz),
-        name=f"day_{chat_id}",
-        chat_id=chat_id
-    )
-    application.job_queue.run_daily(
-        evening_job,
-        time=time(hour=20, minute=0, tzinfo=tz),
-        name=f"evening_{chat_id}",
-        chat_id=chat_id
-    )
-
-
 # ================== ЗАПУСК ==================
 survey_handler = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
@@ -552,7 +568,7 @@ survey_handler = ConversationHandler(
     fallbacks=[]
 )
 
-# ВАЖНО: фото-хендлер добавляем отдельно (как у тебя), и лучше ДО survey_handler
+# ВАЖНО: фото-хендлер отдельно, и ДО survey_handler
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(survey_handler)
 
