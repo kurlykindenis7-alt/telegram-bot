@@ -7,6 +7,7 @@ import json
 from datetime import time, timezone
 import base64
 import re
+import os
 
 
 from telegram import (
@@ -26,8 +27,10 @@ from telegram.ext import (
 from openai import OpenAI
 
 # ================== НАСТРОЙКИ ==================
-BOT_TOKEN = "8312757035:AAHqmBQyr28OG7SsELAsT7VY6PsSSuQ3Cns"
-OPENAI_API_KEY = "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"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 client = OpenAI(api_key=OPENAI_API_KEY)
