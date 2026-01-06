@@ -9,7 +9,6 @@ import base64
 import re
 import os
 
-
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -24,26 +23,23 @@ from telegram.ext import (
     filters,
 )
 
-import os
 from openai import OpenAI
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY not found in environment variables")
-
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-client = OpenAI(api_key=OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN not found in environment variables")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY not found in environment variables")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 
 # ================== ДАННЫЕ ==================
 user_settings = {}  # Настройки уведомлений
@@ -94,7 +90,7 @@ FINAL_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=True
 )
-TZ_KEYBOARD = ReplyKeyboardMarkup([[f"UTC{n:+d}"] for n in range(-12, 15)], resize_keyboard=True, one_time_keyboard=True)
+
 AFTER_SUBSCRIBE_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["Связь с командой Екатерины 🌿"],
@@ -141,6 +137,7 @@ QUESTIONS = [
     ("activity_level", "Есть ли дополнительная физическая активность?", "activity")
 ]
 
+
 # ================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 SETTINGS_FILE = "user_settings.json"
 
@@ -180,42 +177,8 @@ def calculate_bmi(height_cm, weight_kg):
         return None
 
 def get_user_tz(chat_id: int):
-    # PythonAnywhere обычно в UTC, поэтому фиксируем МСК: UTC+3
     return timezone(timedelta(hours=3))
 
-
-# ================== ОПРОСЫ И НАПОМИНАНИЯ ==================
-def send_poll(chat_id):
-    app.bot.send_poll(chat_id, poll_question, poll_options)
-
-def send_reminder(chat_id):
-    app.bot.send_message(chat_id, reminder_text)
-
-def schedule_poll_time(chat_id, time_str):
-    try:
-        h, m = map(int, time_str.split(":"))
-        now = datetime.now()
-        run_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if run_time <= now: run_time += timedelta(days=1)
-        delay = (run_time - now).total_seconds()
-        timer = threading.Timer(delay, send_poll, args=(chat_id,))
-        timer.start()
-        poll_jobs.append(timer)
-    except:
-        app.bot.send_message(chat_id, "Неверный формат времени. Введите ЧЧ:ММ.")
-
-def schedule_reminder_time(chat_id, time_str):
-    try:
-        h, m = map(int, time_str.split(":"))
-        now = datetime.now()
-        run_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if run_time <= now: run_time += timedelta(days=1)
-        delay = (run_time - now).total_seconds()
-        timer = threading.Timer(delay, send_reminder, args=(chat_id,))
-        timer.start()
-        reminder_jobs.append(timer)
-    except:
-        app.bot.send_message(chat_id, "Неверный формат времени. Введите ЧЧ:ММ.")
 
 # ================== АНКЕТИРОВАНИЕ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -255,6 +218,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=get_keyboard(q_type))
     return QUESTION_FLOW
 
+
 # ================== ОБРАБОТКА ФОТО ==================
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -278,7 +242,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(reply)
 
-    except Exception as e:
+    except Exception:
         logging.exception("Ошибка анализа фото")
         await update.message.reply_text(
             "Не получилось распознать блюдо 😕\n"
@@ -315,10 +279,10 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
         ],
     )
 
-    # 1) Пытаемся взять текст из output_text
-    text = getattr(response, "output_text", None)
+    text = getattr(response, "output_text", None) or ""
+    text = text.strip()
+
     if not text:
-        # 2) Если output_text пустой — вытаскиваем из output вручную
         try:
             parts = []
             for item in response.output:
@@ -331,24 +295,17 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
             text = ""
 
     if not text:
-        # Чтобы понять, что именно приходит, логируем сырой ответ (коротко)
         logging.error("Пустой ответ от модели в analyze_food_image")
         raise ValueError("Empty model output")
 
-    # 3) Пытаемся парсить как JSON напрямую
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # 4) Если модель добавила текст — вытащим первый JSON-объект из строки
         m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if m:
             return json.loads(m.group(0))
-
         logging.error("Не удалось извлечь JSON из ответа модели: %r", text[:500])
         raise
-
-
-
 
 
 # ================== ИТОГИ ==================
@@ -432,6 +389,7 @@ def calculate_zones(u):
         zones["zone_red_flags"]=1
     return zones
 
+
 # ================== ОТЧЕТ И ФИНАЛЬНОЕ МЕНЮ ==================
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = context.user_data
@@ -488,15 +446,18 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👇 Следующий шаг — настройка удобного времени уведомлений"
     )
     await update.message.reply_text(final_message, reply_markup=FINAL_KEYBOARD)
-
     return FINAL_MENU_STATE
+
 
 async def final_menu_handler(update, context):
     text = update.message.text
     chat_id = update.effective_chat.id
 
+    logging.info("final_menu_handler: text=%r chat_id=%s", text, chat_id)
+
     if text == "🔔 Подписаться на уведомления":
         schedule_daily_notifications(context.application, chat_id)
+        logging.info("Subscribed and scheduled for chat_id=%s", chat_id)
 
         await update.message.reply_text(
             "Уведомления включены ✅\n\n"
@@ -517,6 +478,7 @@ async def final_menu_handler(update, context):
 
     await update.message.reply_text("Пожалуйста, выберите действие кнопкой ниже.")
     return FINAL_MENU_STATE
+
 
 async def morning_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
@@ -578,6 +540,7 @@ def schedule_daily_notifications(application, chat_id: int):
         chat_id=chat_id
     )
 
+
 # ================== ЗАПУСК ==================
 survey_handler = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
@@ -589,11 +552,12 @@ survey_handler = ConversationHandler(
     fallbacks=[]
 )
 
+# ВАЖНО: фото-хендлер добавляем отдельно (как у тебя), и лучше ДО survey_handler
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(survey_handler)
+
 load_user_settings()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     print("Бот запущен")
     app.run_polling()
