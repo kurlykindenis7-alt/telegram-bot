@@ -109,7 +109,7 @@ CHECKIN_DAY_RESULT = ReplyKeyboardMarkup(
     [["Отлично", "Нормально", "Плохо"]],
     resize_keyboard=True,
     one_time_keyboard=True,
-
+)
 # ================== АНКЕТА ==================
 QUESTIONS = [
     ("height_cm", "Ваш рост (см):", None),
