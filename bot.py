@@ -609,6 +609,17 @@ async def on_startup(application):
 
 app.post_init = on_startup
 
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    logging.exception("Unhandled exception while handling update", exc_info=err)
+    if isinstance(err, Conflict):
+        logging.error(
+            "Conflict: another bot instance is already polling getUpdates. "
+            "Stopping this instance."
+        )
+        await context.application.stop()
+
 # ================== ХЕНДЛЕРЫ ==================
 survey_handler = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
@@ -623,6 +634,7 @@ survey_handler = ConversationHandler(
 # ВАЖНО: фото-хендлер отдельно и выше conversation, чтобы точно срабатывал
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 app.add_handler(survey_handler)
+app.add_error_handler(error_handler)
 
 load_user_settings()
 
