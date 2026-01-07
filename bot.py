@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.error import Conflict
+
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
