@@ -39,6 +39,7 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 user_settings = {}  # Настройки уведомлений (пока не используем)
 weekly_data = {}    # Накопление ежедневных данных (пока не используем)
 answers = {}        # Ответы пользователей (для анкеты)
+scheduled_tasks = {}  # Планируемые задачи уведомлений
 
 # ================== СОСТОЯНИЯ ==================
 START_MENU, QUESTION_FLOW, FINAL_MENU_STATE = range(3)
@@ -231,7 +232,6 @@ def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
 
 # ================== ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ (без JobQueue) ==================
 # Важно: это работает без python-telegram-bot[job-queue]
-    scheduled_tasks = {}
 
 
 async def _send_scheduled_messages(bot, chat_id, message_payloads):
@@ -249,7 +249,6 @@ async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, messag
         if delay > 0:
             await asyncio.sleep(delay)
         try:
-            await bot.send_message(chat_id, message_text)
             if isinstance(message_text, list):
                 await _send_scheduled_messages(bot, chat_id, message_text)
             else:
