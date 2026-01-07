@@ -5,6 +5,7 @@ import base64
 import re
 import os
 import asyncio
+from typing import List, Optional, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -208,14 +209,10 @@ def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
 
 # ================== ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ (без JobQueue) ==================
 # Важно: это работает без python-telegram-bot[job-queue]
-scheduled_tasks: dict[int, list[asyncio.Task]] = {}
+    scheduled_tasks = {}
 
 
-async def _send_scheduled_messages(
-    bot,
-    chat_id: int,
-    message_payloads: List[Tuple[str, Optional[ReplyKeyboardMarkup]]],
-):
+async def _send_scheduled_messages(bot, chat_id, message_payloads):
     for text, markup in message_payloads:
         if markup:
             await bot.send_message(chat_id, text, reply_markup=markup)
@@ -223,25 +220,22 @@ async def _send_scheduled_messages(
             await bot.send_message(chat_id, text)
 
 
-async def _daily_loop(
-    bot,
-    chat_id: int,
-    tz: timezone,
-    hour: int,
-    minute: int,
-    message_text: Union[str, List[Tuple[str, Optional[ReplyKeyboardMarkup]]]],
-)::
+async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, message_text):
     while True:
         run = next_run_dt(tz, hour, minute)
         delay = (run - now_in_tz(tz)).total_seconds()
         if delay > 0:
             await asyncio.sleep(delay)
         try:
+            await bot.send_message(chat_id, message_text)
             if isinstance(message_text, list):
-                for text, markup in message_text:
-                    await bot.send_message(chat_id, text, reply_markup=markup)
+                await _send_scheduled_messages(bot, chat_id, message_text)
             else:
                 await bot.send_message(chat_id, message_text)
+        except Exception:
+            logging.exception("Не удалось отправить scheduled message chat_id=%s", chat_id)
+        # чтобы точно не сработало два раза подряд в одну и ту же секунду
+        await asyncio.sleep(1)
 
 
 def schedule_daily_notifications(application, chat_id: int):
