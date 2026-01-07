@@ -592,7 +592,6 @@ async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if text == "🔔 Подписаться на уведомления":
         schedule_daily_notifications(context.application, chat_id)
-
         await update.message.reply_text(
             "Уведомления включены ✅\n\n"
             "📌 Каждый день вам будут приходить:\n"
@@ -616,7 +615,10 @@ async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return FINAL_MENU_STATE
 
-    await update.message.reply_text("Пожалуйста, выберите действие кнопкой ниже.", reply_markup=FINAL_KEYBOARD)
+    await update.message.reply_text(
+        "Пожалуйста, выберите действие кнопкой ниже.",
+        reply_markup=FINAL_KEYBOARD,
+    )
     return FINAL_MENU_STATE
 
 
