@@ -585,42 +585,36 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
+    text = update.message.text
     chat_id = update.effective_chat.id
 
     logging.info("final_menu_handler: text=%r chat_id=%s", text, chat_id)
 
-if text == "🔔 Подписаться на уведомления":
-    schedule_daily_notifications(context.application, chat_id)
-    
-    await update.message.reply_text(
-        "Уведомления включены ✅\n\n"
-        "📌 Каждый день вам будут приходить:\n"
-        "🌅 09:30 — утренний опрос + напоминание выпить воды\n"
-        "🕒 15:00 — дневной опрос + напоминание выпить воды\n"
-        "🌙 20:00 — вечерний опрос + напоминание лечь спать пораньше\n\n"
-        "Ничего дополнительно настраивать не нужно 💚",
-        reply_markup=AFTER_SUBSCRIBE_KEYBOARD,  # убираем кнопку подписки
-    )
-          await update.message.reply_text(
-            "Связь с командой доступна по кнопке ниже:",
-            reply_markup=CONTACT_INLINE_KEYBOARD,
+    if text == "🔔 Подписаться на уведомления":
+        schedule_daily_notifications(context.application, chat_id)
+
+        await update.message.reply_text(
+            "Уведомления включены ✅\n\n"
+            "📌 Каждый день вам будут приходить:\n"
+            "🌅 09:30 — утренний опрос + напоминание выпить воды\n"
+            "🕒 15:00 — дневной опрос + напоминание выпить воды\n"
+            "🌙 20:00 — вечерний опрос + напоминание лечь спать пораньше\n\n"
+            "Ничего дополнительно настраивать не нужно 💚",
+            reply_markup=AFTER_SUBSCRIBE_KEYBOARD
         )
         return FINAL_MENU_STATE
+
+    if text == "Связь с командой Екатерины 🌿":
+        await update.message.reply_text(
+            "Связь с командой:\nhttps://t.me/doc_kazachkova_team"
+        )
         return FINAL_MENU_STATE
 
-if text == "Связь с командой Екатерины 🌿":
-        await update.message.reply_text(
-        "Связь с командой:",
-        reply_markup=CONTACT_INLINE_KEYBOARD,
+    await update.message.reply_text(
+        "Пожалуйста, выберите действие кнопкой ниже."
     )
     return FINAL_MENU_STATE
 
-    await update.message.reply_text(
-        "Пожалуйста, выберите действие кнопкой ниже.",
-        reply_markup=FINAL_KEYBOARD,
-    )
-    return FINAL_MENU_STATE
 
 
 # ================== СТАРТ / WEBHOOK СБРОС ==================
