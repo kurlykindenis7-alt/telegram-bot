@@ -9,7 +9,13 @@ from typing import List, Optional, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.error import Conflict
 
 from telegram.ext import (
@@ -134,6 +140,10 @@ AFTER_SUBSCRIBE_KEYBOARD = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
     one_time_keyboard=True,
+)
+CONTACT_URL = "https://t.me/doc_kazachkova_team"
+CONTACT_INLINE_KEYBOARD = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("Связь с командой Екатерины 🌿", url=CONTACT_URL)]]
 )
 # ================== АНКЕТА ==================
 QUESTIONS = [
@@ -567,6 +577,10 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👇 Следующий шаг — настройка удобного времени уведомлений"
     )
     await update.message.reply_text(final_message, reply_markup=FINAL_KEYBOARD)
+    await update.message.reply_text(
+        "Нужна помощь? Нажмите кнопку ниже:",
+        reply_markup=CONTACT_INLINE_KEYBOARD,
+    )
     return FINAL_MENU_STATE
 
 
@@ -588,10 +602,18 @@ async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Ничего дополнительно настраивать не нужно 💚",
             reply_markup=AFTER_SUBSCRIBE_KEYBOARD,  # убираем кнопку подписки
         )
+          await update.message.reply_text(
+            "Связь с командой доступна по кнопке ниже:",
+            reply_markup=CONTACT_INLINE_KEYBOARD,
+        )
+        return FINAL_MENU_STATE
         return FINAL_MENU_STATE
 
     if text == "Связь с командой Екатерины 🌿":
-        await update.message.reply_text("Связь с командой:\nhttps://t.me/doc_kazachkova_team")
+         await update.message.reply_text(
+            "Связь с командой:",
+            reply_markup=CONTACT_INLINE_KEYBOARD,
+        )
         return FINAL_MENU_STATE
 
     await update.message.reply_text("Пожалуйста, выберите действие кнопкой ниже.", reply_markup=FINAL_KEYBOARD)
