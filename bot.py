@@ -89,6 +89,10 @@ ACTIVITY = ReplyKeyboardMarkup(
     one_time_keyboard=True,
 )
 
+CHECKIN_DAY_RESULT = ReplyKeyboardMarkup(
+    [["Отлично", "Нормально", "Плохо"]], resize_keyboard=True, one_time_keyboard=True
+)
+
 FINAL_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["🔔 Подписаться на уведомления"],
@@ -102,11 +106,6 @@ AFTER_SUBSCRIBE_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["Связь с командой Екатерины 🌿"],
     ],
-    resize_keyboard=True,
-    one_time_keyboard=True,
-)
-CHECKIN_DAY_RESULT = ReplyKeyboardMarkup(
-    [["Отлично", "Нормально", "Плохо"]],
     resize_keyboard=True,
     one_time_keyboard=True,
 )
