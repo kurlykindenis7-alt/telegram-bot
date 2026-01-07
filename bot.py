@@ -211,7 +211,26 @@ def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
 scheduled_tasks: dict[int, list[asyncio.Task]] = {}
 
 
-async def _daily_loop(bot, chat_id: int, tz: timezone, hour: int, minute: int, message_text: str):
+async def _send_scheduled_messages(
+    bot,
+    chat_id: int,
+    message_payloads: List[Tuple[str, Optional[ReplyKeyboardMarkup]]],
+):
+    for text, markup in message_payloads:
+        if markup:
+            await bot.send_message(chat_id, text, reply_markup=markup)
+        else:
+            await bot.send_message(chat_id, text)
+
+
+async def _daily_loop(
+    bot,
+    chat_id: int,
+    tz: timezone,
+    hour: int,
+    minute: int,
+    message_text: Union[str, List[Tuple[str, Optional[ReplyKeyboardMarkup]]]],
+)::
     while True:
         run = next_run_dt(tz, hour, minute)
         delay = (run - now_in_tz(tz)).total_seconds()
