@@ -761,14 +761,18 @@ survey_handler = ConversationHandler(
         CommandHandler("start", start),
         CommandHandler("notify", notify_entry),
     ],
-    
     states={
         START_MENU: [MessageHandler(filters.Regex(r"^Начать анкетирование$"), start_survey)],
         QUESTION_FLOW: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)],
         FINAL_MENU_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, final_menu_handler)],
     },
-    fallbacks=[],
+    fallbacks=[
+        CommandHandler("start", start),
+        CommandHandler("notify", notify_entry),
+    ],
+    allow_reentry=True,
 )
+
 
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
