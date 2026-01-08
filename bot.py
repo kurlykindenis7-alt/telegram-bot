@@ -369,19 +369,19 @@ def schedule_daily_notifications(application, chat_id: int):
 
 
 # ================== АНКЕТИРОВАНИЕ ==================
+# --- START / NOTIFY ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1) Пытаемся получить payload из context.args (когда PTB сам распарсил)
+    # payload из /start notify
     payload = (context.args[0] if context.args else "").strip()
 
-    # 2) Если context.args пустые — вытаскиваем payload вручную из текста "/start notify"
+    # на всякий: если args пустые — парсим вручную
     if not payload:
         txt = (update.effective_message.text or "").strip()
-        # может быть "/start notify" или "/start@YourBot notify"
         parts = txt.split(maxsplit=1)
         if len(parts) == 2:
             payload = parts[1].strip()
 
-    # 👉 если пришли по deeplink notify
+    # если пришли по https://t.me/EkaterinaAiHealth_bot?start=notify
     if payload == "notify":
         await update.message.reply_text(
             "🔔 Включить ежедневные уведомления?",
@@ -389,7 +389,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return FINAL_MENU_STATE
 
-    # 👉 обычный старт — анкета
+    # обычный /start
     text_message = (
         "Здравствуйте!\nЯ — ваш индивидуальный помощник Клуба Здоровья 🌿\n\n"
         "Сейчас я задам несколько вопросов, чтобы понять текущее состояние организма "
@@ -412,6 +412,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return START_MENU
 
+
+async def notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # /notify всегда ведёт в меню уведомлений
+    await update.message.reply_text(
+        "🔔 Включить ежедневные уведомления?",
+        reply_markup=FINAL_KEYBOARD
+    )
+    return FINAL_MENU_STATE
 
 
 
@@ -762,13 +770,18 @@ survey_handler = ConversationHandler(
     fallbacks=[],
 )
 
-# ВАЖНО: фото-хендлер отдельно и выше conversation, чтобы точно срабатывал
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+
+# СНАЧАЛА conversation
+app.add_handler(survey_handler)
+
+# ПОТОМ check-in
 app.add_handler(
     MessageHandler(CheckinActiveFilter() & filters.TEXT & ~filters.COMMAND, handle_checkin_response)
 )
-app.add_handler(survey_handler)
+
 app.add_error_handler(error_handler)
+
 
 load_user_settings()
 
