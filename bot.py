@@ -339,7 +339,7 @@ async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, messag
                 await bot.send_message(chat_id, message_text)
         except Exception:
             logging.exception("Не удалось отправить scheduled message chat_id=%s", chat_id)
-        # чтобы точно не сработало два раза подряд в одну и ту же секунду
+        # чтобы не срабатывало два раза подряд в одну и ту же секунду
         await asyncio.sleep(1)
 
 
