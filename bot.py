@@ -370,11 +370,19 @@ def schedule_daily_notifications(application, chat_id: int):
 
 # ================== АНКЕТИРОВАНИЕ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # аргументы deep-link (/start notify)
-    args = context.args
+    # 1) Пытаемся получить payload из context.args (когда PTB сам распарсил)
+    payload = (context.args[0] if context.args else "").strip()
 
-    # 👉 если пришли по ссылке с notify
-    if args and args[0] == "notify":
+    # 2) Если context.args пустые — вытаскиваем payload вручную из текста "/start notify"
+    if not payload:
+        txt = (update.effective_message.text or "").strip()
+        # может быть "/start notify" или "/start@YourBot notify"
+        parts = txt.split(maxsplit=1)
+        if len(parts) == 2:
+            payload = parts[1].strip()
+
+    # 👉 если пришли по deeplink notify
+    if payload == "notify":
         await update.message.reply_text(
             "🔔 Включить ежедневные уведомления?",
             reply_markup=FINAL_KEYBOARD
@@ -385,8 +393,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_message = (
         "Здравствуйте!\nЯ — ваш индивидуальный помощник Клуба Здоровья 🌿\n\n"
         "Сейчас я задам несколько вопросов, чтобы понять текущее состояние организма "
-        "и дать первые персональные рекомендации.\n"
-        "Анкетирование займет 7–10 минут.\n"
+        "и дать первые персональные рекомендации.\nАнкетирование займет 7–10 минут.\n"
         "Отвечайте честно, здесь нет неправильных ответов 💚"
     )
 
@@ -399,17 +406,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=START_KEYBOARD
             )
         else:
-            await update.message.reply_text(
-                text_message,
-                reply_markup=START_KEYBOARD
-            )
+            await update.message.reply_text(text_message, reply_markup=START_KEYBOARD)
     except Exception:
-        await update.message.reply_text(
-            text_message,
-            reply_markup=START_KEYBOARD
-        )
+        await update.message.reply_text(text_message, reply_markup=START_KEYBOARD)
 
     return START_MENU
+
 
 
 
