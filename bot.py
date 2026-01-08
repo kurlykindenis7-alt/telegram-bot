@@ -120,14 +120,9 @@ DAY_CHECKIN_QUESTIONS = [
     ("energy_level", "Энергия сейчас?", CHECKIN_STATUS),
 ]
 
-EVENING_CHECKIN_MESSAGES = [
-    ("🌙 Вечерний итог дня.\n\nКак прошёл день?", CHECKIN_DAY_RESULT),
-    ("Сон сегодня планируете во сколько лечь?", None),
-    (
-        "😴 Напоминание: постарайтесь лечь пораньше. "
-        "Даже +30 минут сна часто дают ощутимый прирост энергии завтра.",
-        None,
-    ),
+EVENING_CHECKIN_QUESTIONS = [
+    ("day_result", "🌙 Вечерний итог дня.\n\nКак прошёл день?", CHECKIN_DAY_RESULT),
+    ("sleep_plan", "Сон сегодня планируете во сколько лечь?", None),
 ]
 
 FINAL_KEYBOARD = ReplyKeyboardMarkup(
@@ -255,9 +250,20 @@ def _get_checkin_questions(checkin_type: str):
         return MORNING_CHECKIN_QUESTIONS
     if checkin_type == "day":
         return DAY_CHECKIN_QUESTIONS
+    if checkin_type == "evening":
+        return EVENING_CHECKIN_QUESTIONS
     return []
 
 
+def _get_checkin_completion_message(checkin_type: str) -> str:
+    if checkin_type == "morning":
+        return "Ответы записаны ✅\n\n💧 Напоминаю выпить воды."
+    if checkin_type == "day":
+        return "Ответы записаны ✅\n\n🌤 Желаю хорошего дня."
+    if checkin_type == "evening":
+        return "Ответы записаны ✅\n\n😴 Напоминаю лечь спать пораньше."
+    return "Ответы записаны ✅"
+    
 def _record_checkin_answer(chat_id: int, checkin_type: str, field: str, value: str):
     tz = get_user_tz(chat_id)
     date_key = now_in_tz(tz).date().isoformat()
@@ -296,7 +302,7 @@ async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_
     if step >= len(questions):
         checkin_progress.pop(chat_id, None)
         await update.message.reply_text(
-            "Ответы записаны ✅\n\n💧 Напоминаю выпить воды.",
+          _get_checkin_completion_message(checkin_type),
             reply_markup=ReplyKeyboardRemove(),
         )
         return
@@ -349,7 +355,7 @@ def schedule_daily_notifications(application, chat_id: int):
     tasks = [
         application.create_task(_daily_loop(application.bot, chat_id, tz, 9, 30, ("checkin", "morning"))),
         application.create_task(_daily_loop(application.bot, chat_id, tz, 15, 0, ("checkin", "day"))),
-        application.create_task(_daily_loop(application.bot, chat_id, tz, 20, 0, EVENING_CHECKIN_MESSAGES)),
+       application.create_task(_daily_loop(application.bot, chat_id, tz, 20, 0, ("checkin", "evening"))),
     ]
     scheduled_tasks[chat_id] = tasks
 
