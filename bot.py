@@ -271,6 +271,13 @@ def _record_checkin_answer(chat_id: int, checkin_type: str, field: str, value: s
     checkin = daily.setdefault(checkin_type, {})
     checkin[field] = value
 
+async def notify_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # показываем блок подписки
+    await update.message.reply_text(
+        "🔔 Включить уведомления?",
+        reply_markup=FINAL_KEYBOARD
+    )
+    return FINAL_MENU_STATE
 
 async def start_checkin(bot, chat_id: int, checkin_type: str):
     questions = _get_checkin_questions(checkin_type)
@@ -714,7 +721,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ================== ХЕНДЛЕРЫ ==================
 survey_handler = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
+    entry_points=[
+        CommandHandler("start", start),
+        CommandHandler("notify", notify_entry),
+    ],
+    
     states={
         START_MENU: [MessageHandler(filters.Regex(r"^Начать анкетирование$"), start_survey)],
         QUESTION_FLOW: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)],
