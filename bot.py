@@ -5,9 +5,9 @@ import base64
 import re
 import os
 import asyncio
-from typing import List, Optional, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Dict, Any, Optional, List, Tuple
 
 from telegram import (
     Update,
@@ -43,12 +43,15 @@ if not OPENAI_API_KEY:
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+# ================== ФАЙЛЫ ХРАНЕНИЯ ==================
+SETTINGS_FILE = "user_settings.json"
+WEEKLY_DATA_FILE = "weekly_data.json"
+
 # ================== ДАННЫЕ ==================
-user_settings = {}  # Настройки уведомлений (пока не используем)
-weekly_data = {}    # Накопление ежедневных данных (пока не используем)
-answers = {}        # Ответы пользователей (для анкеты)
-scheduled_tasks = {}  # Планируемые задачи уведомлений
-checkin_progress = {}  # Состояние чек-инов по пользователям
+user_settings: Dict[str, Any] = {}     # тут будем хранить subscribers: [chat_id...]
+weekly_data: Dict[str, Any] = {}       # {chat_id: {date: {checkin_type: {field:value}}}}
+scheduled_tasks: Dict[int, List[asyncio.Task]] = {}
+checkin_progress: Dict[int, Dict[str, Any]] = {}
 
 # ================== СОСТОЯНИЯ ==================
 START_MENU, QUESTION_FLOW, FINAL_MENU_STATE = range(3)
@@ -101,28 +104,30 @@ ACTIVITY = ReplyKeyboardMarkup(
 )
 
 CHECKIN_DAY_RESULT = ReplyKeyboardMarkup(
-    [["Отлично", "Нормально", "Плохо"]], resize_keyboard=True, one_time_keyboard=True
+    [["Отлично", "Нормально", "Плохо"]],
+    resize_keyboard=True,
+    one_time_keyboard=True,
 )
 
 CHECKIN_STATUS = ReplyKeyboardMarkup(
-    [["Нормально", "Плохо", "Хорошо"]],
+    [["Хорошо", "Нормально", "Плохо"]],
     resize_keyboard=True,
     one_time_keyboard=True,
 )
 
 MORNING_CHECKIN_QUESTIONS = [
     ("sleep_quality", "🌅 Доброе утро! Быстрый чек-ин.\n\nКак вы спали?", CHECKIN_STATUS),
-    ("energy_level", "Энергия сейчас?", CHECKIN_STATUS),
+    ("energy_level", "⚡ Энергия сейчас?", CHECKIN_STATUS),
 ]
 
 DAY_CHECKIN_QUESTIONS = [
     ("wellbeing", "🏙 Дневной чек-ин.\n\nКак самочувствие сейчас?", CHECKIN_STATUS),
-    ("energy_level", "Энергия сейчас?", CHECKIN_STATUS),
+    ("energy_level", "⚡ Энергия сейчас?", CHECKIN_STATUS),
 ]
 
 EVENING_CHECKIN_QUESTIONS = [
     ("day_result", "🌙 Вечерний итог дня.\n\nКак прошёл день?", CHECKIN_DAY_RESULT),
-    ("sleep_plan", "Сон сегодня планируете во сколько лечь?", None),
+    ("sleep_plan", "😴 Во сколько планируете лечь спать?", None),
 ]
 
 FINAL_KEYBOARD = ReplyKeyboardMarkup(
@@ -135,16 +140,16 @@ FINAL_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 AFTER_SUBSCRIBE_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        ["Связь с командой Екатерины 🌿"],
-    ],
+    [["Связь с командой Екатерины 🌿"]],
     resize_keyboard=True,
     one_time_keyboard=True,
 )
+
 CONTACT_URL = "https://t.me/doc_kazachkova_team"
 CONTACT_INLINE_KEYBOARD = InlineKeyboardMarkup(
     [[InlineKeyboardButton("Связь с командой Екатерины 🌿", url=CONTACT_URL)]]
 )
+
 # ================== АНКЕТА ==================
 QUESTIONS = [
     ("height_cm", "Ваш рост (см):", None),
@@ -182,28 +187,42 @@ QUESTIONS = [
     ("activity_level", "Есть ли дополнительная физическая активность?", "activity"),
 ]
 
-# ================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
-SETTINGS_FILE = "user_settings.json"
+# ================== ХРАНЕНИЕ (settings + weekly_data) ==================
+def _safe_json_load(path: str) -> dict:
+    try:
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            return json.loads(raw) if raw else {}
+    except Exception:
+        logging.exception("Failed to load %s", path)
+        return {}
 
-
-def save_user_settings():
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_settings, f, ensure_ascii=False, indent=4)
-
+def _safe_json_save(path: str, data: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logging.exception("Failed to save %s", path)
 
 def load_user_settings():
     global user_settings
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            user_settings = json.loads(content) if content else {}
-    except FileNotFoundError:
-        user_settings = {}
-    except Exception:
-        logging.exception("Не удалось загрузить user_settings.json")
-        user_settings = {}
+    user_settings = _safe_json_load(SETTINGS_FILE)
+    if "subscribers" not in user_settings:
+        user_settings["subscribers"] = []
 
+def save_user_settings():
+    _safe_json_save(SETTINGS_FILE, user_settings)
 
+def load_weekly_data():
+    global weekly_data
+    weekly_data = _safe_json_load(WEEKLY_DATA_FILE)
+
+def save_weekly_data():
+    _safe_json_save(WEEKLY_DATA_FILE, weekly_data)
+
+# ================== УТИЛИТЫ ==================
 def get_keyboard(q_type):
     return {
         "yes_no": YES_NO,
@@ -215,7 +234,6 @@ def get_keyboard(q_type):
         "activity": ACTIVITY,
     }.get(q_type, ReplyKeyboardRemove())
 
-
 def calculate_bmi(height_cm, weight_kg):
     try:
         h = float(height_cm) / 100
@@ -224,15 +242,12 @@ def calculate_bmi(height_cm, weight_kg):
     except Exception:
         return None
 
-
 def get_user_tz(chat_id: int):
-    # фиксируем МСК: UTC+3 (чтобы не зависеть от времени хостинга)
+    # фиксируем МСК: UTC+3
     return timezone(timedelta(hours=3))
-
 
 def now_in_tz(tz: timezone) -> datetime:
     return datetime.now(tz=tz)
-
 
 def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
     n = now_in_tz(tz)
@@ -241,10 +256,19 @@ def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
         run += timedelta(days=1)
     return run
 
+def next_run_weekly_dt(tz: timezone, weekday: int, hour: int, minute: int) -> datetime:
+    """
+    weekday: 0=Mon ... 6=Sun
+    """
+    n = now_in_tz(tz)
+    run = n.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days_ahead = (weekday - n.weekday()) % 7
+    run = run + timedelta(days=days_ahead)
+    if run <= n:
+        run += timedelta(days=7)
+    return run
 
-# ================== ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ (без JobQueue) ==================
-# Важно: это работает без python-telegram-bot[job-queue]
-
+# ================== ЧЕК-ИНЫ ==================
 def _get_checkin_questions(checkin_type: str):
     if checkin_type == "morning":
         return MORNING_CHECKIN_QUESTIONS
@@ -254,7 +278,6 @@ def _get_checkin_questions(checkin_type: str):
         return EVENING_CHECKIN_QUESTIONS
     return []
 
-
 def _get_checkin_completion_message(checkin_type: str) -> str:
     if checkin_type == "morning":
         return "Ответы записаны ✅\n\n💧 Напоминаю выпить воды."
@@ -263,21 +286,17 @@ def _get_checkin_completion_message(checkin_type: str) -> str:
     if checkin_type == "evening":
         return "Ответы записаны ✅\n\n😴 Напоминаю лечь спать пораньше."
     return "Ответы записаны ✅"
-    
+
 def _record_checkin_answer(chat_id: int, checkin_type: str, field: str, value: str):
     tz = get_user_tz(chat_id)
     date_key = now_in_tz(tz).date().isoformat()
-    daily = weekly_data.setdefault(chat_id, {}).setdefault(date_key, {})
+
+    chat_key = str(chat_id)
+    daily = weekly_data.setdefault(chat_key, {}).setdefault(date_key, {})
     checkin = daily.setdefault(checkin_type, {})
     checkin[field] = value
 
-async def notify_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # показываем блок подписки
-    await update.message.reply_text(
-        "🔔 Включить уведомления?",
-        reply_markup=FINAL_KEYBOARD
-    )
-    return FINAL_MENU_STATE
+    save_weekly_data()
 
 async def start_checkin(bot, chat_id: int, checkin_type: str):
     questions = _get_checkin_questions(checkin_type)
@@ -286,7 +305,6 @@ async def start_checkin(bot, chat_id: int, checkin_type: str):
     checkin_progress[chat_id] = {"type": checkin_type, "step": 0}
     _, text, markup = questions[0]
     await bot.send_message(chat_id, text, reply_markup=markup)
-
 
 async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -297,6 +315,7 @@ async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_
     checkin_type = progress["type"]
     questions = _get_checkin_questions(checkin_type)
     step = progress["step"]
+
     if step >= len(questions):
         checkin_progress.pop(chat_id, None)
         return
@@ -309,7 +328,7 @@ async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_
     if step >= len(questions):
         checkin_progress.pop(chat_id, None)
         await update.message.reply_text(
-          _get_checkin_completion_message(checkin_type),
+            _get_checkin_completion_message(checkin_type),
             reply_markup=ReplyKeyboardRemove(),
         )
         return
@@ -318,78 +337,163 @@ async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_
     _, next_text, next_markup = questions[step]
     await update.message.reply_text(next_text, reply_markup=next_markup)
 
-
 class CheckinActiveFilter(filters.MessageFilter):
     def filter(self, message):
         return bool(message and message.chat_id in checkin_progress)
 
-async def _send_scheduled_messages(bot, chat_id, message_payloads):
-    for text, markup in message_payloads:
-        if markup:
-            await bot.send_message(chat_id, text, reply_markup=markup)
-        else:
-            await bot.send_message(chat_id, text)
+# ================== ЕЖЕНЕДЕЛЬНЫЙ ОТЧЁТ ==================
+def _status_to_score(v: str) -> Optional[int]:
+    # Для усреднения, если захочешь
+    m = {"Плохо": 1, "Нормально": 3, "Хорошо": 5}
+    return m.get(v)
 
+def build_weekly_report_text(chat_id: int) -> str:
+    tz = get_user_tz(chat_id)
+    today = now_in_tz(tz).date()
 
-async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, message_text):
+    chat_key = str(chat_id)
+    data_by_date = weekly_data.get(chat_key, {})
+
+    last_7 = []
+    for i in range(7):
+        d = (today - timedelta(days=i)).isoformat()
+        if d in data_by_date:
+            last_7.append((d, data_by_date[d]))
+
+    if not last_7:
+        return (
+            "📊 Недельный отчёт\n\n"
+            "За последние 7 дней у меня нет ваших ответов в чек-инах.\n"
+            "Подсказка: отвечайте на утренние/дневные/вечерние вопросы — и я соберу статистику 💚"
+        )
+
+    sleep_counts = {"Хорошо": 0, "Нормально": 0, "Плохо": 0}
+    morning_energy_counts = {"Хорошо": 0, "Нормально": 0, "Плохо": 0}
+    day_wellbeing_counts = {"Хорошо": 0, "Нормально": 0, "Плохо": 0}
+    day_energy_counts = {"Хорошо": 0, "Нормально": 0, "Плохо": 0}
+
+    days_with_morning = 0
+    days_with_day = 0
+    days_with_evening = 0
+
+    for d, payload in last_7:
+        m = payload.get("morning", {})
+        if m:
+            days_with_morning += 1
+            sq = m.get("sleep_quality")
+            en = m.get("energy_level")
+            if sq in sleep_counts:
+                sleep_counts[sq] += 1
+            if en in morning_energy_counts:
+                morning_energy_counts[en] += 1
+
+        day = payload.get("day", {})
+        if day:
+            days_with_day += 1
+            wb = day.get("wellbeing")
+            en = day.get("energy_level")
+            if wb in day_wellbeing_counts:
+                day_wellbeing_counts[wb] += 1
+            if en in day_energy_counts:
+                day_energy_counts[en] += 1
+
+        e = payload.get("evening", {})
+        if e:
+            days_with_evening += 1
+
+    return (
+        "📊 Недельный отчёт (последние 7 дней)\n\n"
+        f"✅ Дней с утренним чек-ином: {days_with_morning}/7\n"
+        f"✅ Дней с дневным чек-ином: {days_with_day}/7\n"
+        f"✅ Дней с вечерним чек-ином: {days_with_evening}/7\n\n"
+        "🌅 Сон (утро):\n"
+        f"• Хорошо: {sleep_counts['Хорошо']}\n"
+        f"• Нормально: {sleep_counts['Нормально']}\n"
+        f"• Плохо: {sleep_counts['Плохо']}\n\n"
+        "⚡ Энергия (утро):\n"
+        f"• Хорошо: {morning_energy_counts['Хорошо']}\n"
+        f"• Нормально: {morning_energy_counts['Нормально']}\n"
+        f"• Плохо: {morning_energy_counts['Плохо']}\n\n"
+        "🏙 Самочувствие (день):\n"
+        f"• Хорошо: {day_wellbeing_counts['Хорошо']}\n"
+        f"• Нормально: {day_wellbeing_counts['Нормально']}\n"
+        f"• Плохо: {day_wellbeing_counts['Плохо']}\n\n"
+        "⚡ Энергия (день):\n"
+        f"• Хорошо: {day_energy_counts['Хорошо']}\n"
+        f"• Нормально: {day_energy_counts['Нормально']}\n"
+        f"• Плохо: {day_energy_counts['Плохо']}\n\n"
+        "💡 Мини-вывод:\n"
+        "Если часто «Плохо» по сну/энергии — начинаем с режима сна + воды + лёгкой активности 💚"
+    )
+
+async def send_weekly_report(bot, chat_id: int):
+    try:
+        text = build_weekly_report_text(chat_id)
+        await bot.send_message(chat_id, text)
+    except Exception:
+        logging.exception("Failed to send weekly report chat_id=%s", chat_id)
+
+async def _weekly_loop(bot, chat_id: int, tz: timezone, weekday: int, hour: int, minute: int):
+    while True:
+        run = next_run_weekly_dt(tz, weekday, hour, minute)
+        delay = (run - now_in_tz(tz)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await send_weekly_report(bot, chat_id)
+        await asyncio.sleep(1)
+
+# ================== ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ (без JobQueue) ==================
+async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, payload):
     while True:
         run = next_run_dt(tz, hour, minute)
         delay = (run - now_in_tz(tz)).total_seconds()
         if delay > 0:
             await asyncio.sleep(delay)
         try:
-            if isinstance(message_text, tuple) and message_text[0] == "checkin":
-                await start_checkin(bot, chat_id, message_text[1])
+            if isinstance(payload, tuple) and payload[0] == "checkin":
+                await start_checkin(bot, chat_id, payload[1])
             else:
-                if isinstance(message_text, list):
-                    await _send_scheduled_messages(bot, chat_id, message_text)
-                else:
-                    await bot.send_message(chat_id, message_text)
+                await bot.send_message(chat_id, str(payload))
         except Exception:
             logging.exception("Не удалось отправить scheduled message chat_id=%s", chat_id)
-        # чтобы не срабатывало два раза подряд в одну и ту же секунду
         await asyncio.sleep(1)
 
-
-def schedule_daily_notifications(application, chat_id: int):
-    # отменяем старые задачи, если были
+def schedule_all_for_chat(application, chat_id: int):
+    # отменяем старые задачи
     old = scheduled_tasks.get(chat_id, [])
     for t in old:
         t.cancel()
 
     tz = get_user_tz(chat_id)
 
-
     tasks = [
         application.create_task(_daily_loop(application.bot, chat_id, tz, 9, 30, ("checkin", "morning"))),
         application.create_task(_daily_loop(application.bot, chat_id, tz, 15, 0, ("checkin", "day"))),
-       application.create_task(_daily_loop(application.bot, chat_id, tz, 20, 0, ("checkin", "evening"))),
+        application.create_task(_daily_loop(application.bot, chat_id, tz, 20, 0, ("checkin", "evening"))),
+
+        # ✅ еженедельный отчет: воскресенье (6) 21:00 МСК
+        application.create_task(_weekly_loop(application.bot, chat_id, tz, 6, 21, 0)),
     ]
     scheduled_tasks[chat_id] = tasks
 
+# ================== /notify и /start notify ==================
+async def notify_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔔 Включить уведомления?", reply_markup=FINAL_KEYBOARD)
+    return FINAL_MENU_STATE
 
-# ================== АНКЕТИРОВАНИЕ ==================
-# --- START / NOTIFY ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # payload из /start notify
     payload = (context.args[0] if context.args else "").strip()
 
-    # на всякий: если args пустые — парсим вручную
     if not payload:
         txt = (update.effective_message.text or "").strip()
         parts = txt.split(maxsplit=1)
         if len(parts) == 2:
             payload = parts[1].strip()
 
-    # если пришли по https://t.me/EkaterinaAiHealth_bot?start=notify
     if payload == "notify":
-        await update.message.reply_text(
-            "🔔 Включить ежедневные уведомления?",
-            reply_markup=FINAL_KEYBOARD
-        )
+        await update.message.reply_text("🔔 Включить ежедневные уведомления?", reply_markup=FINAL_KEYBOARD)
         return FINAL_MENU_STATE
 
-    # обычный /start
     text_message = (
         "Здравствуйте!\nЯ — ваш индивидуальный помощник Клуба Здоровья 🌿\n\n"
         "Сейчас я задам несколько вопросов, чтобы понять текущее состояние организма "
@@ -412,24 +516,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return START_MENU
 
-
-async def notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # /notify всегда ведёт в меню уведомлений
-    await update.message.reply_text(
-        "🔔 Включить ежедневные уведомления?",
-        reply_markup=FINAL_KEYBOARD
-    )
-    return FINAL_MENU_STATE
-
-
-
+# ================== АНКЕТИРОВАНИЕ ==================
 async def start_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["q_index"] = 0
     _, text, q_type = QUESTIONS[0]
     await update.message.reply_text(text, reply_markup=get_keyboard(q_type))
     return QUESTION_FLOW
-
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q_index = context.user_data.get("q_index", 0)
@@ -445,8 +538,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=get_keyboard(q_type))
     return QUESTION_FLOW
 
-
-# ================== ОБРАБОТКА ФОТО ==================
+# ================== ФОТО (OpenAI) ==================
 async def analyze_food_image(image_bytes: bytes) -> dict:
     encoded = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -464,7 +556,6 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
         "Если есть сомнения — укажи приблизительные значения."
     )
 
-    # OpenAI клиент синхронный -> уводим в поток, чтобы не блокировать бота
     def _call():
         return client.responses.create(
             model="gpt-4.1-mini",
@@ -482,9 +573,7 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
     response = await asyncio.to_thread(_call)
 
     text = (getattr(response, "output_text", None) or "").strip()
-
     if not text:
-        # вытаскиваем руками из response.output
         try:
             parts = []
             for item in getattr(response, "output", []) or []:
@@ -497,7 +586,6 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
             text = ""
 
     if not text:
-        logging.error("Пустой ответ от модели в analyze_food_image")
         raise ValueError("Empty model output")
 
     try:
@@ -506,9 +594,7 @@ async def analyze_food_image(image_bytes: bytes) -> dict:
         m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if m:
             return json.loads(m.group(0))
-        logging.error("Не удалось извлечь JSON из ответа модели: %r", text[:500])
         raise
-
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -521,7 +607,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = update.message.photo[-1]
         file = await photo.get_file()
         image_bytes = await file.download_as_bytearray()
-
         result = await analyze_food_image(bytes(image_bytes))
 
         reply = (
@@ -542,8 +627,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуйте сделать фото ближе и при хорошем освещении."
         )
 
-
-# ================== ИТОГИ ==================
+# ================== ИТОГИ (анкетирование) ==================
 ZONE_TEXTS = {
     "zone_gut": "🟢 Пищеварение: сигналы нестабильной работы ЖКТ.",
     "zone_bmi": "🟢 Метаболический фокус: окружность талии выше нормы.",
@@ -556,7 +640,6 @@ ZONE_TEXTS = {
     "zone_dry_mouth": "🟢 Сухость во рту.",
     "zone_red_flags": "🔴 Важно: симптомы требуют консультации специалиста.",
 }
-
 
 def calculate_general_score(u):
     score, max_score = 0, 0
@@ -583,21 +666,9 @@ def calculate_general_score(u):
         except Exception:
             pass
 
-    BUTTON_SCORE_MAP = {
-        "stool_frequency": {"2–3 раза в сутки": 2, "1 раз в сутки": 1, "1 раз в 1–2 дня": 1, "1 раз в 2–3 дня": 0, "1 раз в 3–5 дней": 0},
-        "activity_level": {"нет": 0, "1–2 раза в неделю": 2, "3 и более раз в неделю": 5},
-        "appetite_level": {"нормальный": 5, "повышенный": 2, "пониженный": 2},
-    }
-    for q, mapping in BUTTON_SCORE_MAP.items():
-        val = u.get(q)
-        if val in mapping:
-            score += mapping[val]
-            max_score += max(mapping.values())
-
     health_score = round((scale_sum / (len(SCALE_QUESTIONS) * 5)) * 10) if SCALE_QUESTIONS else 0
     general_score = round((score / max_score) * 100) if max_score else 0
     return general_score, health_score
-
 
 def calculate_zones(u):
     zones = {k: 0 for k in ZONE_TEXTS.keys()}
@@ -626,8 +697,6 @@ def calculate_zones(u):
         zones["zone_red_flags"] = 1
     return zones
 
-
-# ================== ОТЧЕТ И ФИНАЛЬНОЕ МЕНЮ ==================
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = context.user_data
     general_score, health_score = calculate_general_score(u)
@@ -681,25 +750,17 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Анкета завершена!\n\n"
         "Теперь вам доступны функции:\n"
         "🍽 Подсчёт калорий по фото еды (работает только с VPN)\n"
-        "🌅 Утренние опросы сна в 9:30 каждый день\n"
-        "🌙 Вечерние итоги дня в 20;00 каждый день\n"
-        "📊 Недельная статистика:\n"
-        "• средний сон\n"
-        "• уровень энергии\n"
-        "• стресс\n"
-        "• активность\n\n"
-        "💧 Напоминания о воде\n"
-        "😴 Рекомендации ко сну\n\n"
-        "👇 Следующий шаг — настройка удобного времени уведомлений"
+        "🌅 Утренние опросы в 09:30 каждый день\n"
+        "🏙 Дневной чек-ин в 15:00 каждый день\n"
+        "🌙 Вечерний чек-ин в 20:00 каждый день\n\n"
+        "📊 Недельная статистика приходит автоматически раз в неделю 💚\n\n"
+        "👇 Следующий шаг — подписка на уведомления"
     )
     await update.message.reply_text(final_message, reply_markup=FINAL_KEYBOARD)
-    await update.message.reply_text(
-        "Нужна помощь? Нажмите кнопку ниже:",
-        reply_markup=CONTACT_INLINE_KEYBOARD,
-    )
+    await update.message.reply_text("Нужна помощь? Нажмите кнопку ниже:", reply_markup=CONTACT_INLINE_KEYBOARD)
     return FINAL_MENU_STATE
 
-
+# ================== ФИНАЛЬНОЕ МЕНЮ ==================
 async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.effective_chat.id
@@ -707,33 +768,36 @@ async def final_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logging.info("final_menu_handler: text=%r chat_id=%s", text, chat_id)
 
     if text == "🔔 Подписаться на уведомления":
-        schedule_daily_notifications(context.application, chat_id)
+        # сохраняем подписчика
+        subs = set(user_settings.get("subscribers", []))
+        subs.add(chat_id)
+        user_settings["subscribers"] = sorted(subs)
+        save_user_settings()
+
+        # ставим расписание: ежедневные чек-ины + еженедельный отчет
+        schedule_all_for_chat(context.application, chat_id)
 
         await update.message.reply_text(
             "Уведомления включены ✅\n\n"
-            "📌 Каждый день вам будут приходить:\n"
-            "🌅 09:30 — утренний опрос + напоминание выпить воды\n"
-            "🕒 15:00 — дневной опрос + напоминание выпить воды\n"
-            "🌙 20:00 — вечерний опрос + напоминание лечь спать пораньше\n\n"
+            "📌 Каждый день:\n"
+            "🌅 09:30 — утренний чек-ин\n"
+            "🏙 15:00 — дневной чек-ин\n"
+            "🌙 20:00 — вечерний чек-ин\n\n"
+            "📊 Раз в неделю:\n"
+            "🗓 Воскресенье 21:00 — недельный отчёт\n\n"
             "Ничего дополнительно настраивать не нужно 💚",
             reply_markup=AFTER_SUBSCRIBE_KEYBOARD
         )
         return FINAL_MENU_STATE
 
     if text == "Связь с командой Екатерины 🌿":
-        await update.message.reply_text(
-            "Связь с командой:\nhttps://t.me/doc_kazachkova_team"
-        )
+        await update.message.reply_text(f"Связь с командой:\n{CONTACT_URL}")
         return FINAL_MENU_STATE
 
-    await update.message.reply_text(
-        "Пожалуйста, выберите действие кнопкой ниже."
-    )
+    await update.message.reply_text("Пожалуйста, выберите действие кнопкой ниже.")
     return FINAL_MENU_STATE
 
-
-
-# ================== СТАРТ / WEBHOOK СБРОС ==================
+# ================== STARTUP / ERROR ==================
 async def on_startup(application):
     # чтобы не было конфликтов webhook vs polling
     try:
@@ -741,18 +805,22 @@ async def on_startup(application):
     except Exception:
         logging.exception("delete_webhook failed")
 
+    # ✅ Авто-восстановление расписания для подписчиков после рестарта
+    try:
+        subs = user_settings.get("subscribers", []) or []
+        for chat_id in subs:
+            schedule_all_for_chat(application, int(chat_id))
+        logging.info("Restored schedules for %d subscribers", len(subs))
+    except Exception:
+        logging.exception("Failed to restore schedules")
 
 app.post_init = on_startup
-
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     logging.exception("Unhandled exception while handling update", exc_info=err)
     if isinstance(err, Conflict):
-        logging.error(
-            "Conflict: another bot instance is already polling getUpdates. "
-            "Stopping this instance."
-        )
+        logging.error("Conflict: another bot instance is already polling getUpdates. Stopping this instance.")
         await context.application.stop()
 
 # ================== ХЕНДЛЕРЫ ==================
@@ -773,24 +841,22 @@ survey_handler = ConversationHandler(
     allow_reentry=True,
 )
 
-
+# 1) Фото
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
-# СНАЧАЛА conversation
-app.add_handler(survey_handler)
+# 2) ✅ Чек-ины должны перехватываться ПЕРЕД conversation,
+#    иначе ConversationHandler может “съесть” ответы.
+app.add_handler(MessageHandler(CheckinActiveFilter() & filters.TEXT & ~filters.COMMAND, handle_checkin_response))
 
-# ПОТОМ check-in
-app.add_handler(
-    MessageHandler(CheckinActiveFilter() & filters.TEXT & ~filters.COMMAND, handle_checkin_response)
-)
+# 3) Анкета/меню
+app.add_handler(survey_handler)
 
 app.add_error_handler(error_handler)
 
-
+# ================== RUN ==================
 load_user_settings()
+load_weekly_data()
 
 if __name__ == "__main__":
     print("Бот запущен")
-    # ВАЖНО: конфликт "terminated by other getUpdates request" НЕ лечится кодом,
-    # он лечится тем, что запущен только 1 экземпляр бота.
     app.run_polling(drop_pending_updates=True)
