@@ -333,10 +333,11 @@ async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, messag
         try:
               if isinstance(message_text, tuple) and message_text[0] == "checkin":
                 await start_checkin(bot, chat_id, message_text[1])
-            elif isinstance(message_text, list):
-                await _send_scheduled_messages(bot, chat_id, message_text)
             else:
-                await bot.send_message(chat_id, message_text)
+                 if isinstance(message_text, list):
+                    await _send_scheduled_messages(bot, chat_id, message_text)
+                else:
+                    await bot.send_message(chat_id, message_text)
         except Exception:
             logging.exception("Не удалось отправить scheduled message chat_id=%s", chat_id)
         # чтобы не срабатывало два раза подряд в одну и ту же секунду
