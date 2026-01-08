@@ -331,10 +331,10 @@ async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, messag
         if delay > 0:
             await asyncio.sleep(delay)
         try:
-              if isinstance(message_text, tuple) and message_text[0] == "checkin":
+            if isinstance(message_text, tuple) and message_text[0] == "checkin":
                 await start_checkin(bot, chat_id, message_text[1])
             else:
-                 if isinstance(message_text, list):
+                if isinstance(message_text, list):
                     await _send_scheduled_messages(bot, chat_id, message_text)
                 else:
                     await bot.send_message(chat_id, message_text)
