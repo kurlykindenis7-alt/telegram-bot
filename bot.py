@@ -370,21 +370,47 @@ def schedule_daily_notifications(application, chat_id: int):
 
 # ================== АНКЕТИРОВАНИЕ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # аргументы deep-link (/start notify)
+    args = context.args
+
+    # 👉 если пришли по ссылке с notify
+    if args and args[0] == "notify":
+        await update.message.reply_text(
+            "🔔 Включить ежедневные уведомления?",
+            reply_markup=FINAL_KEYBOARD
+        )
+        return FINAL_MENU_STATE
+
+    # 👉 обычный старт — анкета
     text_message = (
         "Здравствуйте!\nЯ — ваш индивидуальный помощник Клуба Здоровья 🌿\n\n"
         "Сейчас я задам несколько вопросов, чтобы понять текущее состояние организма "
-        "и дать первые персональные рекомендации.\nАнкетирование займет 7–10 минут.\n"
+        "и дать первые персональные рекомендации.\n"
+        "Анкетирование займет 7–10 минут.\n"
         "Отвечайте честно, здесь нет неправильных ответов 💚"
     )
+
     try:
         file_path = Path(__file__).parent / "photo_2026-01-05_03-09-46.jpg"
         if file_path.exists():
-            await update.message.reply_photo(photo=str(file_path), caption=text_message, reply_markup=START_KEYBOARD)
+            await update.message.reply_photo(
+                photo=str(file_path),
+                caption=text_message,
+                reply_markup=START_KEYBOARD
+            )
         else:
-            await update.message.reply_text(text_message, reply_markup=START_KEYBOARD)
+            await update.message.reply_text(
+                text_message,
+                reply_markup=START_KEYBOARD
+            )
     except Exception:
-        await update.message.reply_text(text_message, reply_markup=START_KEYBOARD)
+        await update.message.reply_text(
+            text_message,
+            reply_markup=START_KEYBOARD
+        )
+
     return START_MENU
+
 
 
 async def start_survey(update: Update, context: ContextTypes.DEFAULT_TYPE):
