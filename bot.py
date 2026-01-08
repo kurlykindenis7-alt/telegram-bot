@@ -48,6 +48,7 @@ user_settings = {}  # Настройки уведомлений (пока не �
 weekly_data = {}    # Накопление ежедневных данных (пока не используем)
 answers = {}        # Ответы пользователей (для анкеты)
 scheduled_tasks = {}  # Планируемые задачи уведомлений
+checkin_progress = {}  # Состояние чек-инов по пользователям
 
 # ================== СОСТОЯНИЯ ==================
 START_MENU, QUESTION_FLOW, FINAL_MENU_STATE = range(3)
@@ -103,16 +104,20 @@ CHECKIN_DAY_RESULT = ReplyKeyboardMarkup(
     [["Отлично", "Нормально", "Плохо"]], resize_keyboard=True, one_time_keyboard=True
 )
 
-MORNING_CHECKIN_MESSAGES = [
-    ("🌅 Доброе утро! Быстрый чек-ин.\n\nКак спали? (0–5)", SCALE_0_5),
-    ("Энергия сейчас? (0–5)", SCALE_0_5),
-    ("💧 Напоминание: выпейте стакан воды прямо сейчас.", None),
+CHECKIN_STATUS = ReplyKeyboardMarkup(
+    [["Нормально", "Плохо", "Хорошо"]],
+    resize_keyboard=True,
+    one_time_keyboard=True,
+)
+
+MORNING_CHECKIN_QUESTIONS = [
+    ("sleep_quality", "🌅 Доброе утро! Быстрый чек-ин.\n\nКак вы спали?", CHECKIN_STATUS),
+    ("energy_level", "Энергия сейчас?", CHECKIN_STATUS),
 ]
 
-DAY_CHECKIN_MESSAGES = [
-    ("🏙 Дневной чек-ин.\n\nУровень энергии сейчас? (0–5)", SCALE_0_5),
-    ("Уровень стресса? (0–5)", SCALE_0_5),
-    ("💧 Напоминание: вода. Даже 300–500 мл уже меняют самочувствие.", None),
+DAY_CHECKIN_QUESTIONS = [
+    ("wellbeing", "🏙 Дневной чек-ин.\n\nКак самочувствие сейчас?", CHECKIN_STATUS),
+    ("energy_level", "Энергия сейчас?", CHECKIN_STATUS),
 ]
 
 EVENING_CHECKIN_MESSAGES = [
@@ -245,6 +250,65 @@ def next_run_dt(tz: timezone, hour: int, minute: int) -> datetime:
 # ================== ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ (без JobQueue) ==================
 # Важно: это работает без python-telegram-bot[job-queue]
 
+def _get_checkin_questions(checkin_type: str):
+    if checkin_type == "morning":
+        return MORNING_CHECKIN_QUESTIONS
+    if checkin_type == "day":
+        return DAY_CHECKIN_QUESTIONS
+    return []
+
+
+def _record_checkin_answer(chat_id: int, checkin_type: str, field: str, value: str):
+    tz = get_user_tz(chat_id)
+    date_key = now_in_tz(tz).date().isoformat()
+    daily = weekly_data.setdefault(chat_id, {}).setdefault(date_key, {})
+    checkin = daily.setdefault(checkin_type, {})
+    checkin[field] = value
+
+
+async def start_checkin(bot, chat_id: int, checkin_type: str):
+    questions = _get_checkin_questions(checkin_type)
+    if not questions:
+        return
+    checkin_progress[chat_id] = {"type": checkin_type, "step": 0}
+    _, text, markup = questions[0]
+    await bot.send_message(chat_id, text, reply_markup=markup)
+
+
+async def handle_checkin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    progress = checkin_progress.get(chat_id)
+    if not progress:
+        return
+
+    checkin_type = progress["type"]
+    questions = _get_checkin_questions(checkin_type)
+    step = progress["step"]
+    if step >= len(questions):
+        checkin_progress.pop(chat_id, None)
+        return
+
+    field, _, _ = questions[step]
+    answer_text = (update.message.text or "").strip()
+    _record_checkin_answer(chat_id, checkin_type, field, answer_text)
+
+    step += 1
+    if step >= len(questions):
+        checkin_progress.pop(chat_id, None)
+        await update.message.reply_text(
+            "Ответы записаны ✅\n\n💧 Напоминаю выпить воды.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    progress["step"] = step
+    _, next_text, next_markup = questions[step]
+    await update.message.reply_text(next_text, reply_markup=next_markup)
+
+
+class CheckinActiveFilter(filters.MessageFilter):
+    def filter(self, message):
+        return bool(message and message.chat_id in checkin_progress)
 
 async def _send_scheduled_messages(bot, chat_id, message_payloads):
     for text, markup in message_payloads:
@@ -261,7 +325,9 @@ async def _daily_loop(bot, chat_id, tz: timezone, hour: int, minute: int, messag
         if delay > 0:
             await asyncio.sleep(delay)
         try:
-            if isinstance(message_text, list):
+              if isinstance(message_text, tuple) and message_text[0] == "checkin":
+                await start_checkin(bot, chat_id, message_text[1])
+            elif isinstance(message_text, list):
                 await _send_scheduled_messages(bot, chat_id, message_text)
             else:
                 await bot.send_message(chat_id, message_text)
@@ -281,8 +347,8 @@ def schedule_daily_notifications(application, chat_id: int):
 
 
     tasks = [
-        application.create_task(_daily_loop(application.bot, chat_id, tz, 9, 30, MORNING_CHECKIN_MESSAGES)),
-        application.create_task(_daily_loop(application.bot, chat_id, tz, 15, 0, DAY_CHECKIN_MESSAGES)),
+        application.create_task(_daily_loop(application.bot, chat_id, tz, 9, 30, ("checkin", "morning"))),
+        application.create_task(_daily_loop(application.bot, chat_id, tz, 15, 0, ("checkin", "day"))),
         application.create_task(_daily_loop(application.bot, chat_id, tz, 20, 0, EVENING_CHECKIN_MESSAGES)),
     ]
     scheduled_tasks[chat_id] = tasks
@@ -652,6 +718,9 @@ survey_handler = ConversationHandler(
 
 # ВАЖНО: фото-хендлер отдельно и выше conversation, чтобы точно срабатывал
 app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+app.add_handler(
+    MessageHandler(CheckinActiveFilter() & filters.TEXT & ~filters.COMMAND, handle_checkin_response)
+)
 app.add_handler(survey_handler)
 app.add_error_handler(error_handler)
 
